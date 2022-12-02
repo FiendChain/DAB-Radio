@@ -41,7 +41,7 @@ private:
     std::mutex mutex_fp_out;
 
     std::vector<std::complex<uint8_t>> buf_rd;
-    std::vector<std::complex<float>> buf_rd_raw;
+    std::vector<std::complex<int16_t>> buf_rd_raw;
     // objects
     std::unique_ptr<OFDM_Demod> demod;
     // runner state
@@ -126,13 +126,7 @@ private:
                 break;
             }
 
-            for (int i = 0; i < block_size; i++) {
-                auto& v = buf_rd[i];
-                const float I = static_cast<float>(v.real()) - 127.5f;
-                const float Q = static_cast<float>(v.imag()) - 127.5f;
-                buf_rd_raw[i] = std::complex<float>(I, Q);
-            }
-
+            ConvertRawToExpected(buf_rd, buf_rd_raw);
             demod->Process(buf_rd_raw);
         }
     }

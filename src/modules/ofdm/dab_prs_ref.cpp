@@ -136,7 +136,15 @@ static const PRS_Table_Entry* PRS_PARAMS_MODE_TABLE[4] = {
     PRS_PARAMS_MODE_IV, 
 };
 
-void get_DAB_PRS_reference(const int transmission_mode, tcb::span<std::complex<float>> buf) {
+inline std::complex<int16_t> GetPRS(const float phi) {
+    const float FIXED_POINT_SCALING = 128.0f;
+    return { 
+        (int16_t)(std::cos(phi) * FIXED_POINT_SCALING),
+        (int16_t)(std::sin(phi) * FIXED_POINT_SCALING)
+    };
+}
+
+void get_DAB_PRS_reference(const int transmission_mode, tcb::span<std::complex<int16_t>> buf) {
     const size_t nb_fft = buf.size();
     if (transmission_mode <= 0 || transmission_mode > 4) {
         throw std::runtime_error(fmt::format("Invalid transmission mode {}", transmission_mode));
@@ -169,14 +177,10 @@ void get_DAB_PRS_reference(const int transmission_mode, tcb::span<std::complex<f
         auto& e = p_table[p_table_index];
         const int h = H_TABLE[e.i][k-e.k_min];
         const float phi = (float)M_PI / 2.0f * (float)(h + e.n);
-        const auto prs = std::complex<float>(
-            std::cos(phi),
-            std::sin(phi)
-        );
         if (k >= e.k_max) {
             p_table_index++;
         }
-        buf[nb_fft+k] = prs;
+        buf[nb_fft+k] = GetPRS(phi);
     }
 
     // 0 < f <= F/2
@@ -184,14 +188,10 @@ void get_DAB_PRS_reference(const int transmission_mode, tcb::span<std::complex<f
         auto& e = p_table[p_table_index];
         const int h = H_TABLE[e.i][k-e.k_min];
         const float phi = (float)M_PI / 2.0f * (float)(h + e.n);
-        const auto prs = std::complex<float>(
-            std::cos(phi),
-            std::sin(phi)
-        );
         if (k >= e.k_max) {
             p_table_index++;
         }
         // NOTE: 0th bin of fft is the DC value which is 0
-        buf[k] = prs;
+        buf[k] = GetPRS(phi);
     }
 }

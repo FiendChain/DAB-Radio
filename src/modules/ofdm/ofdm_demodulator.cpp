@@ -5,6 +5,7 @@
 #include "ofdm_demodulator.h"
 #include "ofdm_demodulator_threads.h"
 #include <kiss_fft.h>
+#include "ofdm_dsp.h"
 
 #include "utility/joint_allocate.h"
 
@@ -26,28 +27,11 @@ static constexpr float Ts = 1.0f/Fs;
 static auto PLL_TABLE = QuantizedOscillator(5, (int)(Fs));
 #endif
 
-static inline viterbi_bit_t convert_to_viterbi_bit(const float x) {
-    // DOC: ETSI EN 300 401
-    // Referring to clause 14.5 - QPSK symbol mapper
-    // phi = (1-2*b0) + (1-2*b1)*1j 
-    // x0 = 1-2*b0, x1 = 1-2*b1
-    // b = (1-x)/2
-
-    // NOTE: Phil Karn's viterbi decoder is configured so that b => b' : (0,1) => (-A,+A)
-    // Where b is the logical bit value, and b' is the value used for soft decision decoding
-    // b' = (2*b-1) * A 
-    // b' = (1-x-1)*A
-    // b' = -A*x
-    constexpr float scale = (float)(SOFT_DECISION_VITERBI_HIGH);
-    const float v = -x*scale;
-    return (viterbi_bit_t)(v);
-}
-
 // DOC: docs/DAB_implementation_in_SDR_detailed.pdf
 // All of the implmentation details are based on the specified document
 OFDM_Demod::OFDM_Demod(
     const OFDM_Params _params, 
-    tcb::span<const std::complex<float>> _prs_fft_ref, 
+    tcb::span<const std::complex<int16_t>> _prs_fft_ref, 
     tcb::span<const int> _carrier_mapper,
     int nb_desired_threads)
 :   params(_params), 
@@ -201,7 +185,7 @@ OFDM_Demod::~OFDM_Demod() {
 // Clause 3.12.1: Symbol timing synchronisation
 // Clause 3.13.2 Integral frequency offset estimation
 // Clause 3.12.2: Frame synchronisation
-void OFDM_Demod::Process(tcb::span<const std::complex<float>> buf) {
+void OFDM_Demod::Process(tcb::span<const std::complex<int16_t>> buf) {
     PROFILE_TAG_THREAD("OFDM_Demod::ProcessThread");
     PROFILE_ENABLE_TRACE_LOGGING(true);
     PROFILE_ENABLE_TRACE_LOGGING_CONTINUOUS(true);
@@ -257,7 +241,7 @@ void OFDM_Demod::Reset() {
     signal_l1_average = 0;
 }
 
-size_t OFDM_Demod::FindNullPowerDip(tcb::span<const std::complex<float>> buf) {
+size_t OFDM_Demod::FindNullPowerDip(tcb::span<const std::complex<int16_t>> buf) {
     PROFILE_BEGIN_FUNC();
     // Clause 3.12.2 - Frame synchronisation using power detection
     // we run this if we dont have an initial estimate for the prs index
@@ -315,7 +299,7 @@ size_t OFDM_Demod::FindNullPowerDip(tcb::span<const std::complex<float>> buf) {
     return (size_t)nb_read;
 }
 
-size_t OFDM_Demod::ReadNullPRS(tcb::span<const std::complex<float>> buf) {
+size_t OFDM_Demod::ReadNullPRS(tcb::span<const std::complex<int16_t>> buf) {
     PROFILE_BEGIN_FUNC();
     const size_t nb_read = correlation_time_buffer.ConsumeBuffer(buf);
     if (!correlation_time_buffer.IsFull()) {
@@ -326,7 +310,7 @@ size_t OFDM_Demod::ReadNullPRS(tcb::span<const std::complex<float>> buf) {
     return nb_read;
 }
 
-size_t OFDM_Demod::RunCoarseFreqSync(tcb::span<const std::complex<float>> buf) {
+size_t OFDM_Demod::RunCoarseFreqSync(tcb::span<const std::complex<int16_t>> buf) {
     PROFILE_BEGIN_FUNC();
     // Clause: 3.13.2 Integral frequency offset estimation
     if (!cfg.sync.is_coarse_freq_correction) {
@@ -343,7 +327,13 @@ size_t OFDM_Demod::RunCoarseFreqSync(tcb::span<const std::complex<float>> buf) {
     // arg(~z0*z1) = arg(z1)-arg(z0)
 
     // Step 1: Get FFT of received PRS 
-    CalculateFFT(prs_sym, correlation_fft_buffer);
+    std::copy_n(prs_sym.begin(), prs_sym.size(), correlation_fft_buffer.begin());
+
+    // NOTE: We scale the data up otherwise it wont produce an FFT
+    for (int i = 0; i < params.nb_fft; i++) {
+        correlation_fft_buffer[i] *= FIXED_POINT_SCALING/4;
+    }
+    CalculateFFT(correlation_fft_buffer, correlation_fft_buffer);
 
     // Step 2: Get complex difference between consecutive bins
     CalculateRelativePhase(correlation_fft_buffer, correlation_fft_buffer);
@@ -407,7 +397,7 @@ size_t OFDM_Demod::RunCoarseFreqSync(tcb::span<const std::complex<float>> buf) {
     return 0;
 }
 
-size_t OFDM_Demod::RunFineTimeSync(tcb::span<const std::complex<float>> buf) {
+size_t OFDM_Demod::RunFineTimeSync(tcb::span<const std::complex<int16_t>> buf) {
     PROFILE_BEGIN_FUNC();
     // Clause 3.12.1 - Symbol timing synchronisation
     auto corr_time_buf = tcb::span(correlation_time_buffer);
@@ -427,7 +417,7 @@ size_t OFDM_Demod::RunFineTimeSync(tcb::span<const std::complex<float>> buf) {
     CalculateIFFT(correlation_fft_buffer, correlation_fft_buffer);
     for (int i = 0; i < params.nb_fft; i++) {
         const auto& v = correlation_fft_buffer[i];
-        const float A = 20.0f*std::log10(std::abs(v));
+        const float A = 20.0f*std::log10((float)std::abs(v));
         correlation_impulse_response[i] = A;
     }
 
@@ -483,7 +473,7 @@ size_t OFDM_Demod::RunFineTimeSync(tcb::span<const std::complex<float>> buf) {
     return 0;
 }
 
-size_t OFDM_Demod::ReadSymbols(tcb::span<const std::complex<float>> buf) {
+size_t OFDM_Demod::ReadSymbols(tcb::span<const std::complex<int16_t>> buf) {
     PROFILE_BEGIN_FUNC();
     const size_t nb_read = inactive_buffer.ConsumeBuffer(buf);
     if (!inactive_buffer.IsFull()) {
@@ -700,28 +690,15 @@ void OFDM_Demod::PipelineThread(OFDM_Demod_Pipeline_Thread& thread_data, OFDM_De
 }
 
 float OFDM_Demod::ApplyPLL(
-    tcb::span<const std::complex<float>> x, tcb::span<std::complex<float>> y, 
+    tcb::span<const std::complex<int16_t>> x, tcb::span<std::complex<int16_t>> y, 
     const float freq_offset, const float dt0)
 {
     PROFILE_BEGIN_FUNC();
     #if !USE_PLL_TABLE
-    const int N = (int)x.size();
-    const bool is_large_offset = std::abs(freq_offset) > 1000.0f;
-    const float dt_step = 2.0f * (float)M_PI * freq_offset * Ts;
 
-    float dt = dt0;
-    for (int i = 0; i < N; i++) {
-        const auto pll = std::complex<float>(
-            std::cos(dt),
-            std::sin(dt));
-        y[i] = x[i] * pll;
-        dt += dt_step;
-
-        if (is_large_offset) {
-            // stop precision loss when going to large values
-            dt = std::fmod(dt, 2.0f*(float)M_PI);
-        }
-    }
+    // NOTE: We don't rescale so the FFT doesn't zero out our results
+    // float dt = apply_pll_scalar(x, y, freq_offset, dt0, 1);
+    float dt = apply_pll_avx2(x, y, freq_offset, dt0, 1);
     return dt;
 
     #else
@@ -760,16 +737,19 @@ float OFDM_Demod::CalculateTimeOffset(const size_t i, const float freq_offset) {
     #endif
 }
 
-float OFDM_Demod::CalculateCyclicPhaseError(tcb::span<const std::complex<float>> sym) {
+float OFDM_Demod::CalculateCyclicPhaseError(tcb::span<const std::complex<int16_t>> sym) {
     PROFILE_BEGIN_FUNC();
     // Clause 3.13.1 - Fraction frequency offset estimation
     const size_t N = params.nb_cyclic_prefix;
     const size_t M = params.nb_fft;
-    auto error_vec = std::complex<float>(0,0);
+
+    auto error_vec = std::complex<int32_t>(0,0);
     for (int i = 0; i < N; i++) {
-        error_vec += std::conj(sym[i]) * sym[M+i];
+        auto error = std::conj(sym[i] / FIXED_POINT_SCALING) * (sym[M+i] / FIXED_POINT_SCALING);
+        error_vec += error;
     }
-    return std::atan2(error_vec.imag(), error_vec.real());
+
+    return std::atan2((float)error_vec.imag(), (float)error_vec.real());
 }
 
 float OFDM_Demod::CalculateFineFrequencyError(const float cyclic_phase_error) {
@@ -837,9 +817,9 @@ void OFDM_Demod::UpdateFineFrequencyOffset(const float delta) {
 
 
 void OFDM_Demod::CalculateDQPSK(
-    tcb::span<const std::complex<float>> in0, 
-    tcb::span<const std::complex<float>> in1, 
-    tcb::span<std::complex<float>> out_vec)
+    tcb::span<const std::complex<int16_t>> in0, 
+    tcb::span<const std::complex<int16_t>> in1, 
+    tcb::span<std::complex<int16_t>> out_vec)
 {
     PROFILE_BEGIN_FUNC();
     const int M = (int)params.nb_data_carriers/2;
@@ -861,7 +841,7 @@ void OFDM_Demod::CalculateDQPSK(
     }
 }
 
-void OFDM_Demod::CalculateViterbiBits(tcb::span<const std::complex<float>> vec_buf, tcb::span<viterbi_bit_t> bit_buf) {
+void OFDM_Demod::CalculateViterbiBits(tcb::span<const std::complex<int16_t>> vec_buf, tcb::span<viterbi_bit_t> bit_buf) {
     PROFILE_BEGIN_FUNC();
     const size_t N = params.nb_data_carriers;
 
@@ -877,28 +857,48 @@ void OFDM_Demod::CalculateViterbiBits(tcb::span<const std::complex<float>> vec_b
         //       I.e. When real=imag, then we expect b0=A, b1=A
         //            But with L2 norm, we get b0=0.707*A, b1=0.707*A
         //                with L1 norm, we get b0=A, b1=A as expected
-        const float A = std::max(std::abs(vec.real()), std::abs(vec.imag()));
-        const auto norm_vec = vec / A;
-        bit_buf[i]   = convert_to_viterbi_bit(+norm_vec.real());
-        bit_buf[i+N] = convert_to_viterbi_bit(-norm_vec.imag());
+        const int16_t L1_mag = std::max(std::abs(vec.real()), std::abs(vec.imag()));
+
+        // DOC: ETSI EN 300 401
+        // Referring to clause 14.5 - QPSK symbol mapper
+        // phi = (1-2*b0) + (1-2*b1)*1j 
+        // x0 = 1-2*b0, x1 = 1-2*b1
+        // b = (1-x)/2
+
+        // NOTE: Phil Karn's viterbi decoder is configured so that b => b' : (0,1) => (-A,+A)
+        // Where b is the logical bit value, and b' is the value used for soft decision decoding
+        // b' = (2*b-1) * A 
+        // b' = (1-x-1)*A
+        // b' = -A*x
+
+        // NOTE: We give some margin to prevent overflowing
+        const int16_t A_margin = 16;
+        const int16_t A = (SOFT_DECISION_VITERBI_HIGH-A_margin);
+        const int16_t K = std::max((int16_t)(L1_mag/A), (int16_t)1);
+
+        // Normalised vector has a L1 magnitude of A
+        const auto norm_vec = vec / K;
+
+        bit_buf[i]   = (viterbi_bit_t)(-norm_vec.real());
+        bit_buf[i+N] = (viterbi_bit_t)(+norm_vec.imag());
     }
 }
 
-void OFDM_Demod::CalculateFFT(tcb::span<const std::complex<float>> fft_in, tcb::span<std::complex<float>> fft_out) {
+void OFDM_Demod::CalculateFFT(tcb::span<const std::complex<int16_t>> fft_in, tcb::span<std::complex<int16_t>> fft_out) {
     kiss_fft(
         fft_cfg, 
         (const kiss_fft_cpx*)fft_in.data(), 
         (kiss_fft_cpx*)fft_out.data());
 }
 
-void OFDM_Demod::CalculateIFFT(tcb::span<const std::complex<float>> fft_in, tcb::span<std::complex<float>> fft_out) {
+void OFDM_Demod::CalculateIFFT(tcb::span<const std::complex<int16_t>> fft_in, tcb::span<std::complex<int16_t>> fft_out) {
     kiss_fft(
         ifft_cfg, 
         (const kiss_fft_cpx*)fft_in.data(), 
         (kiss_fft_cpx*)fft_out.data());
 }
 
-void OFDM_Demod::CalculateRelativePhase(tcb::span<const std::complex<float>> fft_in, tcb::span<std::complex<float>> arg_out) {
+void OFDM_Demod::CalculateRelativePhase(tcb::span<const std::complex<int16_t>> fft_in, tcb::span<std::complex<int16_t>> arg_out) {
     PROFILE_BEGIN_FUNC();
     const int N = (int)params.nb_fft;
     for (int i = 0; i < (N-1); i++) {
@@ -908,30 +908,30 @@ void OFDM_Demod::CalculateRelativePhase(tcb::span<const std::complex<float>> fft
     arg_out[N-1] = {0,0};
 }
 
-void OFDM_Demod::CalculateMagnitude(tcb::span<const std::complex<float>> fft_buf, tcb::span<float> mag_buf) {
+void OFDM_Demod::CalculateMagnitude(tcb::span<const std::complex<int16_t>> fft_buf, tcb::span<float> mag_buf) {
     PROFILE_BEGIN_FUNC();
     const size_t N = params.nb_fft;
     const size_t M = N/2;
     for (int i = 0; i < N; i++) {
         const size_t j = (i+M) % N;
-        const float x = 20.0f*std::log10(std::abs(fft_buf[j]));
+        const float x = 20.0f*std::log10((float)std::abs(fft_buf[j]));
         mag_buf[i] = x;
     }
 }
 
-float OFDM_Demod::CalculateL1Average(tcb::span<const std::complex<float>> block) {
+float OFDM_Demod::CalculateL1Average(tcb::span<const std::complex<int16_t>> block) {
     PROFILE_BEGIN_FUNC();
     const size_t N = block.size();
-    float l1_avg = 0.0f;
+    int16_t l1_avg = 0;
     for (int i = 0; i < N; i++) {
         auto& v = block[i];
         l1_avg += std::abs(v.real()) + std::abs(v.imag());
     }
-    l1_avg /= (float)N;
-    return l1_avg;
+    l1_avg /= (int16_t)N;
+    return (float)l1_avg;
 }
 
-void OFDM_Demod::UpdateSignalAverage(tcb::span<const std::complex<float>> block) {
+void OFDM_Demod::UpdateSignalAverage(tcb::span<const std::complex<int16_t>> block) {
     PROFILE_BEGIN_FUNC();
     const size_t N = block.size();
     const size_t K = (size_t)cfg.signal_l1.nb_samples;

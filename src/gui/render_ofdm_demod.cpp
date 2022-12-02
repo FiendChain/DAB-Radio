@@ -4,16 +4,16 @@
 #include "imgui.h"
 #include "implot.h"
 
-void RenderSourceBuffer(tcb::span<const std::complex<float>> buf_raw)
+void RenderSourceBuffer(tcb::span<const std::complex<int16_t>> buf_raw)
 {
     const size_t block_size = buf_raw.size();
     static double x = 0.0f;
     if (ImGui::Begin("Sampling buffer")) {
         if (ImPlot::BeginPlot("Block")) {
-            const auto* buf = reinterpret_cast<const float*>(buf_raw.data());
+            const auto* buf = reinterpret_cast<const int16_t*>(buf_raw.data());
             ImPlot::SetupAxisLimits(ImAxis_Y1, -128, 128, ImPlotCond_Once);
-            ImPlot::PlotLine("Real", &buf[0], (int)block_size, 1.0f, 0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Imag", &buf[1], (int)block_size, 1.0f, 0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Real", &buf[0], (int)block_size, 1.0f, 0, 0, 0, 2*sizeof(buf[0]));
+            ImPlot::PlotLine("Imag", &buf[1], (int)block_size, 1.0f, 0, 0, 0, 2*sizeof(buf[0]));
             ImPlot::EndPlot();
         }
     }
@@ -46,11 +46,11 @@ void RenderOFDMDemodulator_Plots(OFDM_Demod& demod) {
         auto sym_vec = syms_vec_data.subspan(symbol_index*N, N);
 
         if (ImPlot::BeginPlot("Raw constellation", ImVec2(-1,0), ImPlotFlags_Equal)) {
-            const double A = 4e6;
+            const double A = 40000;
             ImPlot::SetupAxisLimits(ImAxis_X1, -A, A, ImPlotCond_Once);
             ImPlot::SetupAxisLimits(ImAxis_Y1, -A, A, ImPlotCond_Once);
 
-            auto* buf = reinterpret_cast<float*>(sym_vec.data());
+            auto* buf = reinterpret_cast<int16_t*>(sym_vec.data());
             const float marker_size = 2.0f;
             ImPlot::SetNextMarkerStyle(ImPlotMarker_Cross, marker_size);
             ImPlot::PlotScatter("IQ", &buf[0], &buf[1], (int)N, 0, 0, 2*sizeof(buf[0]));
@@ -147,10 +147,10 @@ void RenderOFDMDemodulator_Plots(OFDM_Demod& demod) {
         auto buf_raw = demod.GetCorrelationTimeBuffer();
         const size_t N = buf_raw.size();
         if (ImPlot::BeginPlot("NULL+PRS")) {
-            const auto* buf = reinterpret_cast<const float*>(buf_raw.data());
+            const auto* buf = reinterpret_cast<const int16_t*>(buf_raw.data());
             ImPlot::SetupAxisLimits(ImAxis_Y1, -128, 128, ImPlotCond_Once);
-            ImPlot::PlotLine("Real", &buf[0], (int)N, 1.0f, 0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Imag", &buf[1], (int)N, 1.0f, 0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Real", &buf[0], (int)N, 1.0f, 0, 0, 0, 2*sizeof(buf[0]));
+            ImPlot::PlotLine("Imag", &buf[1], (int)N, 1.0f, 0, 0, 0, 2*sizeof(buf[0]));
 
             const auto target_colour = ImVec4(0,0.8,0,1);
             int marker_id = 0;

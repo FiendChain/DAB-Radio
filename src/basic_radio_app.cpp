@@ -49,7 +49,7 @@ private:
     FILE* fp_in;
 
     std::vector<std::complex<uint8_t>> rd_in_raw;
-    std::vector<std::complex<float>> rd_in_float;
+    std::vector<std::complex<int16_t>> rd_in_data;
     std::unique_ptr<DoubleBuffer<viterbi_bit_t>> frame_double_buffer;
 
     std::unique_ptr<OFDM_Demod> ofdm_demod;
@@ -69,7 +69,7 @@ public:
         auto params = get_dab_parameters(transmission_mode);
 
         rd_in_raw.resize(_block_size);
-        rd_in_float.resize(_block_size);
+        rd_in_data.resize(_block_size);
         frame_double_buffer = std::make_unique<DoubleBuffer<viterbi_bit_t>>(params.nb_frame_bits);
 
         ofdm_demod = Create_OFDM_Demodulator(transmission_mode, total_demod_threads);
@@ -102,7 +102,7 @@ public:
         ofdm_demod_thread->join();
         basic_radio_thread->join();
     }
-    const auto& GetSourceBuffer() { return rd_in_float; }
+    const auto& GetSourceBuffer() { return rd_in_data; }
     auto& GetOFDMDemod() { return *(ofdm_demod.get()); }
     auto& GetRadio() { return *(radio.get()); }
     auto& GetViewController() { return *(radio_view_controller.get()); }
@@ -122,14 +122,8 @@ private:
                 break;
             }
 
-            for (int i = 0; i < block_size; i++) {
-                auto& v = rd_in_raw[i];
-                const float I = static_cast<float>(v.real()) - 127.5f;
-                const float Q = static_cast<float>(v.imag()) - 127.5f;
-                rd_in_float[i] = std::complex<float>(I, Q);
-            }
-
-            ofdm_demod->Process(rd_in_float);
+            ConvertRawToExpected(rd_in_raw, rd_in_data);
+            ofdm_demod->Process(rd_in_data);
         }
     }    
     void OnOFDMFrame(tcb::span<const viterbi_bit_t> buf) {

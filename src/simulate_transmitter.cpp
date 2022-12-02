@@ -18,6 +18,7 @@
 #include "modules/ofdm/dab_prs_ref.h"
 #include "modules/ofdm/dab_ofdm_params_ref.h"
 #include "modules/ofdm/dab_mapper_ref.h"
+#include "modules/ofdm/ofdm_dsp.h"
 #include "utility/getopt/getopt.h"
 #include "utility/span.h"
 
@@ -40,20 +41,11 @@ public:
 };
 
 void ApplyFrequencyShift(
-    tcb::span<const std::complex<float>> x, tcb::span<std::complex<float>> y, 
+    tcb::span<const std::complex<int16_t>> x, tcb::span<std::complex<int16_t>> y, 
     const float frequency, const float Ts=1.0f/2.048e6)
 {
-    const size_t N = x.size();
-    float dt = 0.0f;
-    for (int i = 0; i < N; i++) {
-        auto pll = std::complex<float>(
-            std::cos(dt),
-            std::sin(dt));
-        y[i] = x[i] * pll;
-        dt += 2.0f * (float)M_PI * frequency * Ts;
-        // prevent precision errors when we have a large frequency
-        dt = std::fmod(dt, 2.0f*(float)M_PI);
-    }
+    // apply_pll_scalar(x, y, frequency, 0.0f, FIXED_POINT_SCALING);
+    apply_pll_avx2(x, y, frequency, 0.0f, FIXED_POINT_SCALING);
 }
 
 void usage() {
@@ -110,7 +102,7 @@ int main(int argc, char** argv)
 
     const auto params = get_DAB_OFDM_params(transmission_mode);
 
-    auto prs_fft_ref = std::vector<std::complex<float>>(params.nb_fft);
+    auto prs_fft_ref = std::vector<std::complex<int16_t>>(params.nb_fft);
     auto carrier_mapper = std::vector<int>(params.nb_data_carriers);
     
     get_DAB_PRS_reference(transmission_mode, prs_fft_ref);
@@ -120,7 +112,7 @@ int main(int argc, char** argv)
     const size_t frame_size = 
         params.nb_null_period +
         params.nb_symbol_period*params.nb_frame_symbols;
-    auto frame_out_buf = std::vector<std::complex<float>>(frame_size);
+    auto frame_out_buf = std::vector<std::complex<int16_t>>(frame_size);
     auto frame_tx_buf = std::vector<std::complex<uint8_t>>(frame_size);
     
     // determine the number of bits that the ofdm frame contains
@@ -153,13 +145,12 @@ int main(int argc, char** argv)
     }
 
     ApplyFrequencyShift(frame_out_buf, frame_out_buf, frequency_shift);
-
     for (int i = 0; i < frame_size; i++) {
-        const float I = frame_out_buf[i].real();
-        const float Q = frame_out_buf[i].imag();
-        const float A = 1.0f/(float)params.nb_data_carriers * 200.0f * 4.0f;
-        const uint8_t I0 = static_cast<uint8_t>(I*A + 128.0f);
-        const uint8_t Q0 = static_cast<uint8_t>(Q*A + 128.0f);
+        const int16_t I = frame_out_buf[i].real();
+        const int16_t Q = frame_out_buf[i].imag();
+        // NOTE: We multiply by 3/4 to prevent overflow when down casting
+        const uint8_t I0 = static_cast<uint8_t>((I/5)*3 + 127);
+        const uint8_t Q0 = static_cast<uint8_t>((Q/5)*3 + 127);
         frame_tx_buf[i] = std::complex<uint8_t>(I0, Q0);
     }
 

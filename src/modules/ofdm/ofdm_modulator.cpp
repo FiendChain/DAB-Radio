@@ -1,10 +1,11 @@
 #include "ofdm_modulator.h"
 #include <kiss_fft.h>
 #include <algorithm>
+#include <stdio.h>
 
 OFDM_Modulator::OFDM_Modulator(
     const OFDM_Params _params, 
-    tcb::span<const std::complex<float>> _prs_fft_ref)
+    tcb::span<const std::complex<int16_t>> _prs_fft_ref)
 :   params(_params),
     frame_out_size(_params.nb_null_period + _params.nb_symbol_period*_params.nb_frame_symbols),
     data_in_size((_params.nb_frame_symbols-1)*_params.nb_data_carriers*2/8)
@@ -15,7 +16,11 @@ OFDM_Modulator::OFDM_Modulator(
     prs_fft_ref.resize(params.nb_fft);
     prs_time_ref.resize(params.nb_symbol_period);
 
-    std::copy_n(_prs_fft_ref.begin(), params.nb_fft, prs_fft_ref.begin());
+    const int16_t PRESCALE = 32;
+    // NOTE: Scale PRS_FFT so it doesn't get zeroed by IFFT 
+    for (int i = 0; i < params.nb_fft; i++) {
+        prs_fft_ref[i] = _prs_fft_ref[i] * PRESCALE;
+    }
 
     // create our time domain prs symbol with the cyclic prefix
     {
@@ -26,12 +31,24 @@ OFDM_Modulator::OFDM_Modulator(
         }
     }
 
+    // NOTE: Downscale PRS_FFT back to original
+    for (int i = 0; i < params.nb_fft; i++) {
+        prs_fft_ref[i] = prs_fft_ref[i] / PRESCALE;
+    }
+
+    for (int i = 0; i < params.nb_fft; i++) {
+        if (prs_fft_ref[i] != _prs_fft_ref[i]) {
+            fprintf(stderr, "Ah fuck it didn't rescale properly\n");
+            break;
+        }
+    }
+
     last_sym_fft.resize(params.nb_fft);
     curr_sym_fft.resize(params.nb_fft);
 
     for (int i = 0; i < params.nb_fft; i++) {
-        curr_sym_fft[i] = std::complex<float>(0,0);
-        last_sym_fft[i] = std::complex<float>(0,0);
+        curr_sym_fft[i] = std::complex<int16_t>(0,0);
+        last_sym_fft[i] = std::complex<int16_t>(0,0);
     }
 }
 
@@ -41,7 +58,7 @@ OFDM_Modulator::~OFDM_Modulator()
 }
 
 bool OFDM_Modulator::ProcessBlock(
-    tcb::span<std::complex<float>> frame_out_buf, 
+    tcb::span<std::complex<int16_t>> frame_out_buf, 
     tcb::span<const uint8_t> data_in_buf)
 {
     const size_t nb_frame_out = frame_out_buf.size();
@@ -56,7 +73,7 @@ bool OFDM_Modulator::ProcessBlock(
 
     // null period
     for (int i = 0; i < params.nb_null_period; i++) {
-        frame_out_buf[i] = std::complex<float>(0,0);
+        frame_out_buf[i] = std::complex<int16_t>(0,0);
     }
 
     // prs symbol
@@ -91,13 +108,14 @@ bool OFDM_Modulator::ProcessBlock(
 
 void OFDM_Modulator::CreateDataSymbol(
     tcb::span<const uint8_t> sym_data_in, 
-    tcb::span<std::complex<float>> sym_out)
+    tcb::span<std::complex<int16_t>> sym_out)
 {
     const size_t nb_data_in = sym_data_in.size(); 
     const size_t nb_out = sym_out.size();
 
-    static float A = 1.0f/std::sqrt(2.0f);
-    static std::complex<float> PHASE_MAP[4] = {
+    constexpr int16_t A = 90;
+    constexpr int16_t A_MAG = 127;
+    static std::complex<int16_t> PHASE_MAP[4] = {
         {-A,-A}, {A,-A}, {A,A}, {-A,A}};
 
     // Create raw fft bins
@@ -131,18 +149,31 @@ void OFDM_Modulator::CreateDataSymbol(
         for (int i = 0; i < params.nb_data_carriers/2; i++) {
             const size_t j = params.nb_fft - params.nb_data_carriers/2 + i;
             curr_sym_fft[j] = last_sym_fft[j] * curr_sym_fft[j];
+            curr_sym_fft[j] /= A_MAG;
         }
 
         for (int i = 0; i < params.nb_data_carriers/2; i++) {
             const size_t j = 1+i;
             curr_sym_fft[j] = last_sym_fft[j] * curr_sym_fft[j];
+            curr_sym_fft[j] /= A_MAG;
         }
+    }
+
+    const int16_t PRESCALE = 32;
+    // NOTE: we pass in the data as A*PRESCALE so it doesn't get zeroed by IFFT
+    for (int i = 0; i < params.nb_fft; i++) {
+        curr_sym_fft[i] *= PRESCALE;
     }
 
     // get ifft of symbol
     {
         auto* buf = &sym_out[params.nb_cyclic_prefix];
         kiss_fft(ifft_cfg, (kiss_fft_cpx*)curr_sym_fft.data(), (kiss_fft_cpx*)buf);
+    }
+
+    // NOTE: rescale curr_sym_fft back down to +-A
+    for (int i = 0; i < params.nb_fft; i++) {
+        curr_sym_fft[i] /= PRESCALE;
     }
 
     // create cyclic prefix

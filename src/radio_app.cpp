@@ -117,7 +117,7 @@ private:
 	std::unordered_map<std::string, std::unique_ptr<RadioInstance>> basic_radios;
 	// Double buffer data flow
 	// rtlsdr_device -> double_buffer -> ofdm_demodulator -> double_buffer -> basic_radio
-	std::unique_ptr<DoubleBuffer<std::complex<float>>> raw_double_buffer;
+	std::unique_ptr<DoubleBuffer<std::complex<int16_t>>> raw_double_buffer;
 	std::unique_ptr<DoubleBuffer<viterbi_bit_t>> frame_double_buffer;
 	// rtlsdr_device, ofdm_demodulator, basic_radio all operate on separate threads
 	std::unique_ptr<std::thread> ofdm_demod_thread;
@@ -132,7 +132,7 @@ public:
 		ofdm_demod = Create_OFDM_Demodulator(transmission_mode, total_demod_threads);
 
 		frame_double_buffer = std::make_unique<DoubleBuffer<viterbi_bit_t>>(dab_params.nb_frame_bits);
-		raw_double_buffer = std::make_unique<DoubleBuffer<std::complex<float>>>(0);
+		raw_double_buffer = std::make_unique<DoubleBuffer<std::complex<int16_t>>>(0);
 
         #ifdef _WIN32
         const auto target_host_api_index = Pa_HostApiTypeIdToHostApiIndex(PORTAUDIO_TARGET_HOST_API_ID);
@@ -219,7 +219,7 @@ private:
 			ofdm_demod_thread->join();
 		}
 
-		raw_double_buffer = std::make_unique<DoubleBuffer<std::complex<float>>>(N);
+		raw_double_buffer = std::make_unique<DoubleBuffer<std::complex<int16_t>>>(N);
 		ofdm_demod_thread = std::make_unique<std::thread>([this]() {
 			while (true) {
 				auto* active_buf = raw_double_buffer->AcquireActiveBuffer();
@@ -253,11 +253,7 @@ private:
 		if (inactive_buf == NULL) {
 			return;
 		}
-		for (int i = 0; i < N; i++) {
-			const float I = static_cast<float>(data[i].real()) - 127.0f;
-			const float Q = static_cast<float>(data[i].imag()) - 127.0f;
-			inactive_buf[i] = std::complex<float>(I, Q);
-		}
+		ConvertRawToExpected(data, { inactive_buf, (size_t)N });
 		raw_double_buffer->ReleaseInactiveBuffer();
 	}
 private:

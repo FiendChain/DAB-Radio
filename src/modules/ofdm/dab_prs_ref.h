@@ -7,4 +7,4 @@
 // fine time frame synchronisation
 // Correlation is done by multiplication in the frequency domain,
 // then the inverse fft is done to get the impulse response
-void get_DAB_PRS_reference(const int transmission_mode, tcb::span<std::complex<float>> buf);
+void get_DAB_PRS_reference(const int transmission_mode, tcb::span<std::complex<int16_t>> buf);

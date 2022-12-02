@@ -86,30 +86,30 @@ private:
     // Joint memory allocation block
     std::unique_ptr<uint8_t[]> joint_data_block;
     // 1. pipeline reader double buffer
-    ReconstructionBuffer<std::complex<float>> active_buffer;
-    ReconstructionBuffer<std::complex<float>> inactive_buffer;
-    tcb::span<std::complex<float>> active_buffer_data;
-    tcb::span<std::complex<float>> inactive_buffer_data;
+    ReconstructionBuffer<std::complex<int16_t>> active_buffer;
+    ReconstructionBuffer<std::complex<int16_t>> inactive_buffer;
+    tcb::span<std::complex<int16_t>> active_buffer_data;
+    tcb::span<std::complex<int16_t>> inactive_buffer_data;
     // 2. fine time and coarse frequency synchronisation using time/frequency correlation
-    CircularBuffer<std::complex<float>> null_power_dip_buffer;
-    ReconstructionBuffer<std::complex<float>> correlation_time_buffer;
-    tcb::span<std::complex<float>>    null_power_dip_buffer_data;
-    tcb::span<std::complex<float>>    correlation_time_buffer_data;
+    CircularBuffer<std::complex<int16_t>> null_power_dip_buffer;
+    ReconstructionBuffer<std::complex<int16_t>> correlation_time_buffer;
+    tcb::span<std::complex<int16_t>>    null_power_dip_buffer_data;
+    tcb::span<std::complex<int16_t>>    correlation_time_buffer_data;
     tcb::span<float>                  correlation_impulse_response;
     tcb::span<float>                  correlation_frequency_response;
-    tcb::span<std::complex<float>>    correlation_fft_buffer;
-    tcb::span<std::complex<float>>    correlation_prs_fft_reference;
-    tcb::span<std::complex<float>>    correlation_prs_time_reference;
+    tcb::span<std::complex<int16_t>>    correlation_fft_buffer;
+    tcb::span<std::complex<int16_t>>    correlation_prs_fft_reference;
+    tcb::span<std::complex<int16_t>>    correlation_prs_time_reference;
     // 3. pipeline demodulation
-    tcb::span<std::complex<float>>    pipeline_fft_buffer;
-    tcb::span<std::complex<float>>    pipeline_dqpsk_vec_buffer;
+    tcb::span<std::complex<int16_t>>    pipeline_fft_buffer;
+    tcb::span<std::complex<int16_t>>    pipeline_dqpsk_vec_buffer;
     tcb::span<viterbi_bit_t>          pipeline_out_bits;
     // 4. carrier frequency deinterleaving
     tcb::span<int> carrier_mapper;
 public:
     OFDM_Demod(
         const OFDM_Params _params, 
-        tcb::span<const std::complex<float>> _prs_fft_ref, 
+        tcb::span<const std::complex<int16_t>> _prs_fft_ref, 
         tcb::span<const int> _carrier_mapper,
         int nb_desired_threads=0);
     ~OFDM_Demod();
@@ -119,7 +119,7 @@ public:
     OFDM_Demod(OFDM_Demod&&) = delete;
     OFDM_Demod& operator=(OFDM_Demod&) = delete;
     OFDM_Demod& operator=(OFDM_Demod&&) = delete;
-    void Process(tcb::span<const std::complex<float>> block);
+    void Process(tcb::span<const std::complex<int16_t>> block);
     void Reset();
 public:
     OFDM_Params GetOFDMParams() const { return params; }
@@ -136,34 +136,34 @@ public:
     auto GetFrameDataBits() { return pipeline_out_bits; }
     tcb::span<float> GetImpulseResponse() { return correlation_impulse_response; }
     tcb::span<float> GetCoarseFrequencyResponse() { return correlation_frequency_response; }
-    tcb::span<const std::complex<float>> GetCorrelationTimeBuffer() { return correlation_time_buffer; }
+    tcb::span<const std::complex<int16_t>> GetCorrelationTimeBuffer() { return correlation_time_buffer; }
     auto& On_OFDM_Frame() { return obs_on_ofdm_frame; }
 private:
-    size_t FindNullPowerDip(tcb::span<const std::complex<float>> buf);
-    size_t ReadNullPRS(tcb::span<const std::complex<float>> buf);
-    size_t RunCoarseFreqSync(tcb::span<const std::complex<float>> buf);
-    size_t RunFineTimeSync(tcb::span<const std::complex<float>> buf);
-    size_t ReadSymbols(tcb::span<const std::complex<float>> buf);
+    size_t FindNullPowerDip(tcb::span<const std::complex<int16_t>> buf);
+    size_t ReadNullPRS(tcb::span<const std::complex<int16_t>> buf);
+    size_t RunCoarseFreqSync(tcb::span<const std::complex<int16_t>> buf);
+    size_t RunFineTimeSync(tcb::span<const std::complex<int16_t>> buf);
+    size_t ReadSymbols(tcb::span<const std::complex<int16_t>> buf);
 private:
     void CoordinatorThread();
     void PipelineThread(OFDM_Demod_Pipeline_Thread& thread_data, OFDM_Demod_Pipeline_Thread* dependent_thread_data);
 private:
     float ApplyPLL(
-        tcb::span<const std::complex<float>> x, tcb::span<std::complex<float>> y, 
+        tcb::span<const std::complex<int16_t>> x, tcb::span<std::complex<int16_t>> y, 
         const float freq_offset, const float dt0=0);
     float CalculateTimeOffset(const size_t i, const float freq_offset);
-    float CalculateCyclicPhaseError(tcb::span<const std::complex<float>> sym);
+    float CalculateCyclicPhaseError(tcb::span<const std::complex<int16_t>> sym);
     float CalculateFineFrequencyError(const float cyclic_phase_error);
     void CalculateDQPSK(
-        tcb::span<const std::complex<float>> in0, tcb::span<const std::complex<float>> in1, 
-        tcb::span<std::complex<float>> out_vec);
-    void CalculateViterbiBits(tcb::span<const std::complex<float>> vec_buf, tcb::span<viterbi_bit_t> bit_buf);
-    void CalculateFFT(tcb::span<const std::complex<float>> fft_in, tcb::span<std::complex<float>> fft_out);
-    void CalculateIFFT(tcb::span<const std::complex<float>> fft_in, tcb::span<std::complex<float>> fft_out);
-    void CalculateRelativePhase(tcb::span<const std::complex<float>> fft_in, tcb::span<std::complex<float>> arg_out);
-    void CalculateMagnitude(tcb::span<const std::complex<float>> fft_buf, tcb::span<float> mag_buf);
-    float CalculateL1Average(tcb::span<const std::complex<float>> block);
-    void UpdateSignalAverage(tcb::span<const std::complex<float>> block);
+        tcb::span<const std::complex<int16_t>> in0, tcb::span<const std::complex<int16_t>> in1, 
+        tcb::span<std::complex<int16_t>> out_vec);
+    void CalculateViterbiBits(tcb::span<const std::complex<int16_t>> vec_buf, tcb::span<viterbi_bit_t> bit_buf);
+    void CalculateFFT(tcb::span<const std::complex<int16_t>> fft_in, tcb::span<std::complex<int16_t>> fft_out);
+    void CalculateIFFT(tcb::span<const std::complex<int16_t>> fft_in, tcb::span<std::complex<int16_t>> fft_out);
+    void CalculateRelativePhase(tcb::span<const std::complex<int16_t>> fft_in, tcb::span<std::complex<int16_t>> arg_out);
+    void CalculateMagnitude(tcb::span<const std::complex<int16_t>> fft_buf, tcb::span<float> mag_buf);
+    float CalculateL1Average(tcb::span<const std::complex<int16_t>> block);
+    void UpdateSignalAverage(tcb::span<const std::complex<int16_t>> block);
     void UpdateFineFrequencyOffset(const float delta);
 };
 

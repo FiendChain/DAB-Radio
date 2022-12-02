@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.10)
 project(kissfft)
 
 set(KISSFFT_SRC_DIR ${CMAKE_SOURCE_DIR}/vendor/kissfft)
-set(KISSFFT_DATATYPE float)
+set(KISSFFT_FIXED_POINT 16)
+set(KISSFFT_DATATYPE int16_t)
 set(KISSFFT_OUTPUT_NAME kissfft)
 
 add_library(kissfft SHARED
@@ -15,6 +16,7 @@ add_library(kissfft SHARED
 target_include_directories(kissfft PUBLIC ${KISSFFT_SRC_DIR})
 target_compile_definitions(kissfft PUBLIC 
     kiss_fft_scalar=${KISSFFT_DATATYPE}
+    FIXED_POINT=${KISSFFT_FIXED_POINT}
     KISS_FFT_SHARED)
 set_target_properties(kissfft PROPERTIES 
     DEFINE_SYMBOL KISS_FFT_BUILD
